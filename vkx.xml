@@ -1,0 +1,2322 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:activiti="http://activiti.org/bpmn" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC" xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI" typeLanguage="http://www.w3.org/2001/XMLSchema" expressionLanguage="http://www.w3.org/1999/XPath" targetNamespace="http://www.activiti.org/test">
+  <collaboration id="Collaboration">
+    <participant id="pool1" name="Collibra Export Metamodel Process" processRef="collibraExportMetamodelProcess"></participant>
+  </collaboration>
+  <process id="collibraExportMetamodelProcess" name="Export Metamodel" isExecutable="true">
+    <documentation>This workflow can be used to export metamodel to spreadsheet.</documentation>
+    <laneSet id="laneSet_collibraExportMetamodelProcess">
+      <lane id="lane1" name="Start User">
+        <flowNodeRef>startevent1</flowNodeRef>
+        <flowNodeRef>endevent1</flowNodeRef>
+        <flowNodeRef>exclusivegateway1</flowNodeRef>
+        <flowNodeRef>scripttask_exportAll</flowNodeRef>
+        <flowNodeRef>scripttask_exportCustom</flowNodeRef>
+        <flowNodeRef>boundarytimer2</flowNodeRef>
+        <flowNodeRef>usertask_export_result</flowNodeRef>
+        <flowNodeRef>exclusivegateway2</flowNodeRef>
+        <flowNodeRef>usertask1</flowNodeRef>
+        <flowNodeRef>endevent2</flowNodeRef>
+        <flowNodeRef>boundarytimer3</flowNodeRef>
+      </lane>
+    </laneSet>
+    <startEvent id="startevent1" name="Start" activiti:initiator="startUser">
+      <documentation>Export Config</documentation>
+      <extensionElements>
+        <activiti:formProperty id="exportMode" name="&lt;div title=&quot;Export the entire metamodel or the custom metamodel elements only?&quot;&gt;&lt;span style=&quot;color: red&quot;&gt;*&lt;/span&gt;&lt;b&gt;Export Mode&lt;/b&gt;&lt;/div&gt;" type="enum" required="true">
+          <activiti:value id="full" name="Entire Metamodel"></activiti:value>
+          <activiti:value id="custom" name="Custom Metamodel Only"></activiti:value>
+        </activiti:formProperty>
+        <activiti:formProperty id="startDate" name="&lt;div title=&quot;Export metamodel elements that are created after a given date&quot;&gt;Metamodel Elements Created &lt;b&gt;After&lt;/b&gt;&lt;br/&gt;(&lt;i&gt;applicable only if &quot;Custom Metamodel Only&quot; is selected above&lt;/i&gt;)&lt;/div&gt;" type="datetime">
+          <activiti:value id="dateTimeType" name="date"></activiti:value>
+        </activiti:formProperty>
+        <activiti:formProperty id="endDate" name="&lt;div title=&quot;Export metamodel elements that are created before a given date&quot;&gt;Metamodel Elements Created &lt;b&gt;Before&lt;/b&gt;&lt;br/&gt;(&lt;i&gt;applicable only if &quot;Custom Metamodel Only&quot; is selected above&lt;/i&gt;)&lt;/div&gt;" type="datetime">
+          <activiti:value id="dateTimeType" name="date"></activiti:value>
+        </activiti:formProperty>
+        <activiti:formProperty id="submit" name="Export" type="button" default="false" required="true"></activiti:formProperty>
+        <activiti:formProperty id="exportFileSuffix" name="exportFileSuffix" type="string" default=".xls" readable="false" required="true"></activiti:formProperty>
+        <activiti:formProperty id="infoTaskLifespan" name="infoTaskLifespan" type="string" default="PT1H" readable="false" required="true"></activiti:formProperty>
+      </extensionElements>
+    </startEvent>
+    <endEvent id="endevent1" name="End"></endEvent>
+    <scriptTask id="scripttask_exportCustom" name="Export Custom Metamodel" scriptFormat="groovy" activiti:autoStoreVariables="false">
+      <script><![CDATA[import java.io.FileOutputStream
+import org.apache.poi.hssf.usermodel.HSSFWorkbook
+import com.collibra.dgc.core.api.dto.meta.assettype.FindAssetTypesRequest
+import com.collibra.dgc.core.api.dto.meta.domaintype.FindDomainTypesRequest
+import com.collibra.dgc.core.api.dto.meta.attributetype.FindAttributeTypesRequest
+import com.collibra.dgc.core.api.dto.meta.relationtype.FindRelationTypesRequest
+import com.collibra.dgc.core.api.dto.meta.status.FindStatusesRequest
+import com.collibra.dgc.core.api.dto.role.FindRolesRequest
+import com.collibra.dgc.core.api.dto.quality.FindDataQualityRulesRequest
+import com.collibra.dgc.core.api.dto.instance.community.FindCommunitiesRequest
+import com.collibra.dgc.core.api.dto.instance.domain.FindDomainsRequest
+
+def exportMetamodel = { exportMode, exportFileSuffix  ->
+	def result
+	def br
+	def msg
+	def exportUser
+	def lenientExceptionHandling
+	def workbook
+	def exportFileName
+	def exportTempFile
+	def init = {
+		->
+		br = "<br/>${System.getProperty('line.separator')}"
+		result = [:]
+		lenientExceptionHandling = false
+		msg = ""
+		workbook = new HSSFWorkbook()
+		exportUser = userComponent.getCurrentUser().getFullName()
+		exportFileName = "${exportMode} Operating Model Export by ${exportUser} on ${new Date().format('YYYY-MM-dd hh-mm-ss zzz')}${exportFileSuffix}"
+		exportTempFile = File.createTempFile(exportUser,exportFileSuffix)
+		loggerApi.info('exportFileName-------->'+exportFileName)
+	}
+	def prepExit = { fail ->
+		result.failed = fail
+		result.message = msg.toString()
+		result
+	}
+	def exitFail = { prepExit(true) }
+	def exitSuccess = { prepExit(false) }
+
+	def populateSheet = { newSheet, header, rows ->
+		headerRow = newSheet.createRow(0)
+		header.keySet().eachWithIndex{ col, i ->
+			headerRow.createCell(i).setCellValue(header[col])
+		}
+		loggerApi.info('Header returned')
+		def rowNum = 1
+		rows.each { row ->
+			def reportRow = newSheet.createRow(rowNum)
+			header.keySet().eachWithIndex{ col, i ->
+				if(row.containsKey(col)){
+					val = row.get(col)
+				}else{
+					val = null
+				}
+				reportRow.createCell(i).setCellValue(val)
+			}
+			rowNum++
+		}
+	}
+	loggerApi.info('Rows returned')
+	loggerApi.info('Data Populated')
+
+	def createSheet = { sheetName, header, rows ->
+		def newSheet = workbook.createSheet(sheetName)
+		populateSheet(newSheet, header, rows)
+	}
+	loggerApi.info('Sheet Created')
+
+	//Exporting asset types
+	def exportAssetTypes = {
+		->
+		def assetTypes = assetTypeApi.findAssetTypes(FindAssetTypesRequest.builder().build()).getResults()
+		def header = [:]
+		header.asset = "Asset name"
+		header.assetId = "Asset Id"
+		header.assetDesc = "Description"
+		header.parentAsset = "Parent Asset"
+		header.parentAssetId = "Parent Asset Id"
+		header.colorCode = "Color"
+		header.iconCode = "Symbol Icon"
+		header.acronymCode = "Symbol Code"
+		header.symbolType = "Symbol Type"
+
+		def rows = []
+		assetTypes.each{ assetType ->
+			def assetModifiedDate = new Date(assetType.getLastModifiedOn())
+			if(assetModifiedDate  >= startDate && assetModifiedDate <= endDate)
+			{
+				if(!assetType.getId().toString().contains('00000000-0000-0000'))
+				{
+					row = [:]
+					row.assetId = assetType.id.toString()
+					row.asset = assetType.name
+					if(assetType.description != null)
+					{
+						row.assetDesc = assetType.description
+					}
+					if(assetType.parent != null)
+					{
+						row.parentAsset = assetType.parent.name
+						row.parentAssetId = assetType.parent.id.toString()
+					}
+					row.colorCode = assetType.getSymbolData().getColor()
+					row.iconCode = assetType.getSymbolData().getIconCode()
+					row.acronymCode = assetType.getSymbolData().getAcronymCode()
+					row.symbolType = assetType.getSymbolData().getSymbolType().toString()
+					rows.add(row)
+				}
+			}
+		}
+		createSheet ("Asset Types", header, rows.flatten())
+		loggerApi.info('Asset Types Extracted')
+	}
+	//Exporting vocabulary types
+	def exportVocabularyTypes = {
+		->
+		def vocTypes = domainTypeApi.findDomainTypes(FindDomainTypesRequest.builder().build()).getResults()
+		def header = [:]
+		header.voc = "Domain type name"
+		header.vocId = "Domain type Id"
+		header.vocDesc = "Description"
+		header.parentVoc = "Parent Domain type name"
+		header.parentVocId = "Parent Domain type Id"
+		def rows = []
+		vocTypes.each{ vocType ->
+			def domianModifiedDate = new Date(vocType.getLastModifiedOn())
+			if(domianModifiedDate  >= startDate && domianModifiedDate <= endDate)
+			{
+				if(!vocType.getId().toString().contains('00000000-0000-0000'))
+				{
+					row = [:]
+					row.voc = vocType.name
+					row.vocId = vocType.id.toString()
+					if(vocType.description != null)
+					{
+						row.vocDesc = vocType.description
+					}
+					if(vocType.parent != null)
+					{
+						row.parentVoc = vocType.parent.name
+						row.parentVocId = vocType.parent.id.toString()
+					}
+					rows.add(row)
+				}
+			}
+		}
+		createSheet ("Domain Types", header, rows.flatten())
+		loggerApi.info('Domain Types Extracted')
+	}
+	//Exporting attribute types
+	def exportAttributeTypes = {
+		->
+		def attributeTypes = attributeTypeApi.findAttributeTypes(FindAttributeTypesRequest.builder().build()).getResults()
+		def header = [:]
+		header.attributeName = "Attribute type name"
+		header.attributeId = "Attribute type Id"
+		header.attrDesc = "Description"
+		header.attrDType = "Data type"
+		header.values = "Values"
+		header.isInteger = 'IsInteger'
+		header.metric = "Metric"
+		header.language = "Language"
+		def rows = []
+		attributeTypes.each{ attributeType ->
+			def attributeModifiedDate = new Date(attributeType.getLastModifiedOn())
+			if(attributeModifiedDate  >= startDate && attributeModifiedDate <= endDate)
+			{
+				if(!attributeType.getId().toString().contains('00000000-0000-0000'))
+				{
+					row = [:]
+					row.attributeName = attributeType.name
+					row.attributeId = attributeType.id.toString()
+					if(attributeType.description != null) {
+						row.attrDesc = attributeType.description
+					}
+					def aType = attributeType.resourceType
+					switch(aType) {
+						case "StringAttributeType"  :
+							aType = "Text"
+							break;
+						case "BooleanAttributeType"  :
+							aType = "True/False"
+							break;
+						case "DateAttributeType"  :
+							aType = "Date"
+							break;
+						case "NumericAttributeType"  :
+							aType = "Number"
+							break;
+						case "SingleValueListAttributeType"  :
+							aType = "Selection"
+							break;
+						case "MultiValueListAttributeType"  :
+							aType = "Multi Selection"
+							break;
+						case "ScriptAttributeType" :
+							aType = "Script"
+							break;
+						default :
+							loggerApi.info('Attribute type '+ aType +' not listed in case')
+					}
+					row.attrDType = aType
+					if(aType == 'Selection' || aType == 'Multi Selection') {
+						def selectionValues = attributeType.allowedValues.toString()
+						selectionValues = selectionValues.replaceAll("\\[", "");
+						selectionValues = selectionValues.replaceAll("\\]", "");
+						row.values = selectionValues
+					}
+					if(aType == 'Number')
+					{
+						def integerValue = attributeType.isInteger
+						row.isInteger = integerValue
+						def metricValue = attributeType.statisticsEnabled
+						row.metric = metricValue
+					}
+					if(aType == 'True/False')
+					{
+						def metricV = attributeType.statisticsEnabled
+						if(metricV == 'null')
+						{
+							row.metric = 'FALSE'
+						}
+						else
+						{
+							row.metric = metricV
+						}
+					}
+					if(aType == 'Script')
+					{
+						def lang = attributeType.language
+						if(lang != null)
+						{
+							row.language = lang
+						}
+					}
+					rows.add(row)
+				}
+			}
+		}
+		createSheet ("Attribute Types", header, rows.flatten())
+		loggerApi.info('Attribute Types Extracted')
+	}
+	//Exporting relation types
+	def exportRelationTypes = {
+		->
+		def binaryFactTypes = relationTypeApi.findRelationTypes(FindRelationTypesRequest.builder().build()).getResults()
+		def header = [:]
+		header.headTermName = "Head Term Name"
+		header.headTermId = "Head Term Id"
+		header.role = "Role"
+		header.coRole = "CoRole"
+		header.tailTermName = "Tail Term Name"
+		header.tailTermId = "Tail Term Id"
+		header.relationId = "Relation Id"
+		def rows = []
+		binaryFactTypes.collect{ binaryFactType ->
+			def relTypeModifiedDate = new Date(binaryFactType.getLastModifiedOn())
+			if(relTypeModifiedDate  >= startDate && relTypeModifiedDate <= endDate)
+			{
+				if(!binaryFactType.getId().toString().contains('00000000-0000-0000'))
+				{
+					if(binaryFactType.getRole() != null && binaryFactType.getCoRole() != null)
+					{
+						row = [:]
+						row.headTermName = binaryFactType.getSourceType().getName()
+						row.headTermId = binaryFactType.getSourceType().getId().toString()
+						row.role = binaryFactType.getRole()
+						row.coRole = binaryFactType.getCoRole()
+						row.tailTermName = binaryFactType.getTargetType().getName()
+						row.tailTermId = binaryFactType.getTargetType().getId().toString()
+						row.relationId = binaryFactType.getId().toString()
+						rows.add(row)
+					}
+				}
+			}
+		}
+		createSheet ("Relation Types", header, rows.flatten())
+		loggerApi.info('Relation Types Extracted')
+	}
+	//Exporting complex relations
+	def exportComplexRelations = {
+		->
+		def complexRelationTypes = complexRelationTypeApi.getAllComplexRelationTypes()
+		def custComplexRelationTypes = []
+		def defaultComplexRelations = ['Fact Type', 'Context']
+		def header = [:]
+		header.crName = "Complex Relation Name"
+		header.crId = "Complex Relation Id"
+		header.crDesc = "Description"
+		header.crAttrName = "Attribute Name"
+		header.crAttrId = "Attribute Id"
+		header.crMinOccur = "Min Occurs"
+		header.crMaxOccur = "Max Occurs"
+		header.crRole = "Role"
+		header.crTailName = "Tail Term Name"
+		header.crTailId = "Tail Term Id"
+		header.colorCode = "Color"
+		header.iconCode = "Symbol Icon"
+		header.acronymCode = "Symbol Code"
+		header.symbolType = "Symbol Type"
+		def rows =[]
+		for (complexRelationType in complexRelationTypes) {
+			if(!defaultComplexRelations.contains(complexRelationType.getName())) {
+				custComplexRelationTypes.add(complexRelationType)
+			}
+		}
+		custComplexRelationTypes.each{complexRel ->
+			def crTypeModifiedDate = new Date(complexRel.getLastModifiedOn())
+			if(crTypeModifiedDate  >= startDate && crTypeModifiedDate <= endDate)
+			{
+
+				if(!complexRel.getId().toString().contains('00000000-0000-0000'))
+				{
+					if(!complexRel.getAttributeTypes().isEmpty())
+					{
+						complexRel.getAttributeTypes().each{complexAttribute ->
+							row = [:]
+							row.crName = complexRel.getName()
+							row.crId = complexRel.getId().toString()
+							if(complexRel.getDescription() != null)
+							{
+								row.crDesc = complexRel.getDescription()
+							}
+							row.crAttrName = complexAttribute.getAttributeType().getName()
+							row.crAttrId = complexAttribute.getAttributeType().getId().toString()
+							row.crMinOccur = complexAttribute.getMinimumOccurrences()
+							if(complexAttribute.getMaximumOccurrences() == null)
+							{
+								row.crMaxOccur = 1
+							}
+							else
+							{
+								row.crMaxOccur = complexAttribute.getMaximumOccurrences()
+							}
+							row.colorCode = complexRel.getSymbolData().getColor()
+							row.iconCode = complexRel.getSymbolData().getIconCode()
+							row.acronymCode = complexRel.getSymbolData().getAcronymCode()
+							row.symbolType = complexRel.getSymbolData().getSymbolType().toString()
+							rows.add(row)
+						}
+					}
+				}
+			}
+		}
+		custComplexRelationTypes.each{complexRelType ->
+			def crTypModifiedDate = new Date(complexRelType.getLastModifiedOn())
+			if(crTypModifiedDate  >= startDate && crTypModifiedDate <= endDate)
+			{
+				if(!complexRelType.getId().toString().contains('00000000-0000-0000'))
+				{
+					if(!complexRelType.getLegTypes().isEmpty())
+					{
+						complexRelType.getLegTypes().each{complexBinary ->
+							row = [:]
+							row.crName = complexRelType.getName()
+							row.crId = complexRelType.getId().toString()
+							if(complexRelType.getDescription() != null)
+							{
+								row.crDesc = complexRelType.getDescription()
+							}
+							row.crRole = complexBinary.getRole()
+							row.crTailName = complexBinary.getAssetType().getName()
+							row.crTailId = complexBinary.getAssetType().getId().toString()
+							row.crMinOccur = complexBinary.getMinimumOccurrences()
+							if(complexBinary.getMaximumOccurrences() == null)
+							{
+								row.crMaxOccur = 2147483647
+							}
+							else
+							{
+								row.crMaxOccur = complexBinary.getMaximumOccurrences()
+							}
+							row.colorCode = complexRelType.getSymbolData().getColor()
+							row.iconCode = complexRelType.getSymbolData().getIconCode()
+							row.acronymCode = complexRelType.getSymbolData().getAcronymCode()
+							row.symbolType = complexRelType.getSymbolData().getSymbolType().toString()
+							rows.add(row)
+						}
+					}
+				}
+			}
+		}
+		createSheet ("Complex Relations", header, rows.flatten())
+		loggerApi.info('Complex Relation Extracted')
+	}
+	//Exporting resource roles
+	def exportResourceRoles = {
+		->
+		def header = [:]
+		header.rrName = "Resource Role Name"
+		header.rrId = "Resource Role Id"
+		header.rrDesc = "Description"
+		header.rrRights = "Rights"
+		rows = []
+		def resourceRoles =roleApi.findRoles(FindRolesRequest.builder().build()).getResults().each{ resourceRole ->
+			def resRoleModifiedDate = new Date(resourceRole.getLastModifiedOn())
+			if(resRoleModifiedDate  >= startDate && resRoleModifiedDate <= endDate)
+			{
+				if(!resourceRole.getId().toString().contains('00000000-0000-0000'))
+				{
+					if(!resourceRole.isGlobal())
+					{
+						def rights = resourceRole.getPermissions()
+						row = [:]
+						row.rrName = resourceRole.getName()
+						row.rrId = resourceRole.getId().toString()
+						if(resourceRole.getDescription() != null)
+						{
+							row.rrDesc = resourceRole.getDescription()
+						}
+						loggerApi.info(resourceRole.getName())
+
+						def rightAccess = ""
+						for (right in rights){
+							if (rightAccess == " ") {
+								rightAccess  = right
+							}
+							else {
+								rightAccess  = rightAccess+','+right
+							}
+						}
+						row.rrRights = rightAccess.replaceFirst(/,/, "")
+						rows.add(row)
+					}
+				}
+			}
+		}
+		createSheet ("Resource Roles", header, rows.flatten())
+		loggerApi.info('Resource Roles Extracted')
+	}
+
+	//Exporting statuses
+	def exportStatuses = {
+		->
+		def header = [:]
+		header.stName = "Status Name"
+		header.stId = "Status Id"
+		header.stDesc = "Description"
+		def rows =[]
+		def statuses =statusApi.findStatuses(FindStatusesRequest.builder().build()).getResults().each{ status ->
+			def statusModifiedDate = new Date(status.getLastModifiedOn())
+			if(statusModifiedDate  >= startDate && statusModifiedDate <= endDate)
+			{
+				if(!status.getId().toString().contains('00000000-0000-0000'))
+				{
+					row = [:]
+					row.stName = status.name
+					row.stId = status.id.toString()
+					if(status.description != null)
+					{
+						row.stDesc = status.description
+					}
+					rows.add(row)
+				}
+			}
+		}
+		createSheet ("Statuses", header, rows.flatten())
+		loggerApi.info('Statuses Extracted')
+	}
+
+	def exportDQRules = {
+		->
+		def header = [:]
+		header.dqRuleName = "DQ Rule Name"
+		header.dqRuleId = "DQ Rule Id"
+		header.dqRuleDesc = "Description"
+		header.catTypeId = "Categorization Type Id"
+		header.catTypeAsset = "Categorization Type Resource Type"
+		header.attributeTypeId = "Attribute Type Id"
+		header.attributeTypeName = "Atribute Type Name"
+		header.countOperation = "Count Operation"
+		header.outBoundRelTypeId = "Outbound Rel Type Id"
+		header.relTypeId = "Relation Type Id"
+		header.isOutBoundRoleDirection = "Is Outbound Role Direction"
+		header.isRoleDirection = "Is Role Direction"
+		def rows = []
+		def dataQualityRules = dataQualityRuleApi.findDataQualityRules(FindDataQualityRulesRequest.builder().build()).getResults().each{dataQualityRule ->
+			def dqRuleCreatedDate = new Date(dataQualityRule.getLastModifiedOn())
+			if(dqRuleCreatedDate  >= startDate && dqRuleCreatedDate <= endDate)
+			{
+				loggerApi.info('DQRules ----'+dataQualityRule.toString())
+				row = [:]
+				row.dqRuleName = dataQualityRule.getName()
+				row.dqRuleId = dataQualityRule.getId().toString()
+				row.dqRuleDesc = dataQualityRule.getDescription()
+				row.catTypeId = dataQualityRule.getCategorizationRelationType().getId().toString()
+				row.catTypeAsset = dataQualityRule.getCategorizationRelationType().getResourceType().toString()
+				rows.add(row)
+
+				def dqMetrics = dataQualityRule.getDataQualityMetrics().each{dqMetric ->
+					row = [:]
+					row.dqRuleName = dataQualityRule.getName()
+					row.dqRuleId = dataQualityRule.getId().toString()
+					row.attributeTypeId = dqMetric.getAttributeType().getId().toString()
+					row.attributeTypeName = dqMetric.getAttributeType().getName()
+					row.countOperation = dqMetric.getCountOperation().name()
+					rows.add(row)
+				}
+
+				def dqRelationTraces = dataQualityRule.getRelationTrace().getRelationTraceEntries().each{dqRelationTrace ->
+					row = [:]
+					row.dqRuleName = dataQualityRule.getName()
+					row.dqRuleId = dataQualityRule.getId().toString()
+					row.outBoundRelTypeId = dqRelationTrace.getOutBoundRelationTypeId().toString()
+					row.relTypeId = dqRelationTrace.getRelationTypeId().toString()
+					row.isOutBoundRoleDirection = dqRelationTrace.isOutBoundRoleDirection()
+					row.isRoleDirection = dqRelationTrace.isRoleDirection()
+					rows.add(row)
+				}
+			}
+
+
+		}
+		createSheet ("Data Quality Rules", header, rows.flatten())
+		loggerComponent.info('DQ Rules Extracted')
+	}
+
+	def exportGlobalAssignments = {
+		->
+		def header = [:]
+		header.ruleConceptName = "Rule Concept Name"
+		header.ruleConceptId = "Rule Concept Id"
+		header.attributeName = "Attribute Name"
+		header.attributeId = "Assigned Resource Id"
+		header.minOccurs = "Minimum Occurs"
+		header.maxOccurs = "Maximum Occurs"
+		header.relSourceAsset = "Source Asset Type Name"
+		header.relSourceId = "Source Asset Type Id"
+		header.relRole = "Role"
+		header.relCoRole = "Co Role"
+		header.relTargetAsset = "Target Asset Type Name"
+		header.relTargetId = "Target Asset Type Id"
+		header.relTypeId = "Assigned Relation Type Id"
+		header.crName = "Complex Relation Type Name"
+		header.crId = "Complex Relation Type Id"
+		header.domainTypeName = "Domain Type Name"
+		header.domainTypeId = "Domain Type Id"
+		header.statusName = "Status Name"
+		header.statusId = "Status Id"
+		header.deRuleName = "DQ Rule Name"
+		header.deRuleId = "DQ Rule Id"
+		header.defaultStatusId = "Default Status Id"
+		header.scopeName = "Scope Name"
+		header.scopeId = "Scope Id"
+		def rows = []
+		def assignmentUID = ""
+		def allAssetTypes = assetTypeApi.findAssetTypes(FindAssetTypesRequest.builder().build()).getResults()
+		loggerApi.info('allAssetTypes ---'+allAssetTypes.toString())
+		allAssetTypes.each{ allAssetType ->
+			def assignments = assignmentApi.getAssignmentsForAssetType(allAssetType.id)
+			for(assignment in assignments)
+			{
+				if(assignment.getScope() == null)
+				{
+					def assignmentModifiedDate = new Date(assignment.getLastModifiedOn())
+					if(assignmentModifiedDate  >= startDate && assignmentModifiedDate <= endDate)
+					{
+						loggerApi.info('assignment ----'+assignment.getResourceType().toString())
+						assignmentUID = assignment.id.toString()
+						if(!assignment.getAssignedAttributeTypes().isEmpty())
+						{
+							def assignedAttributeTypes = assignment.getAssignedAttributeTypes()
+							for(assignedAttributeType in assignedAttributeTypes)
+							{
+								row = [:]
+								row.ruleConceptName = assignment.assetType.name
+								row.ruleConceptId = assignment.assetType.id.toString()
+								row.attributeName = assignedAttributeType.getAttributeType().getName()
+								row.attributeId = assignedAttributeType.getAssignedResourceId().toString()
+								row.minOccurs = assignedAttributeType.getMinimumOccurrences()
+								if(assignedAttributeType.getMaximumOccurrences() != null)
+								{
+									row.maxOccurs = assignedAttributeType.getMaximumOccurrences()
+								}
+								else
+								{
+									row.maxOccurs = 10000
+								}
+								rows.add(row)
+							}
+						}
+
+						if(!assignment.getAssignedRelationTypes().isEmpty())
+						{
+							def assignedRelationTypes = assignment.getAssignedRelationTypes()
+							for(assignedRelationType in assignedRelationTypes)
+							{
+								row = [:]
+								row.ruleConceptName = assignment.assetType.name
+								row.ruleConceptId = assignment.assetType.id.toString()
+								row.relTypeId = assignedRelationType.getAssignedResourceId().toString()
+								row.relSourceAsset = assignedRelationType.getRelationType().getSourceType().getName()
+								row.relSourceId = assignedRelationType.getRelationType().getSourceType().getId().toString()
+								row.relRole = assignedRelationType.getRelationType().getRole()
+								row.relCoRole = assignedRelationType.getRelationType().getCoRole()
+								row.relTargetAsset = assignedRelationType.getRelationType().getTargetType().getName()
+								row.relTargetId = assignedRelationType.getRelationType().getTargetType().getId().toString()
+								row.minOccurs = assignedRelationType.getMinimumOccurrences()
+								if(assignedRelationType.getMaximumOccurrences() != null)
+								{
+									row.maxOccurs = assignedRelationType.getMaximumOccurrences()
+								}
+								else
+								{
+									row.maxOccurs = 10000
+								}
+								rows.add(row)
+							}
+						}
+
+						if(!assignment.getAssignedComplexRelationTypes().isEmpty())
+						{
+							def assignedComplexRelationTypes = assignment.getAssignedComplexRelationTypes()
+							for(assignedComplexRelationType in assignedComplexRelationTypes)
+							{
+								row = [:]
+								row.ruleConceptName = assignment.assetType.name
+								row.ruleConceptId = assignment.assetType.id.toString()
+								row.crId = assignedComplexRelationType.getAssignedResourceId().toString()
+								row.crName = assignedComplexRelationType.getComplexRelationType().getName()
+								row.minOccurs = assignedComplexRelationType.getMinimumOccurrences()
+								if(assignedComplexRelationType.getMaximumOccurrences() != null)
+								{
+									row.maxOccurs = assignedComplexRelationType.getMaximumOccurrences()
+								}
+								else
+								{
+									row.maxOccurs = 10000
+								}
+								rows.add(row)
+							}
+						}
+
+						if(!assignment.getDomainTypes().isEmpty())
+						{
+							def assignedDomainTypes = assignment.getDomainTypes()
+							for(assignedDomainType in assignedDomainTypes)
+							{
+								row = [:]
+								row.ruleConceptName = assignment.assetType.name
+								row.ruleConceptId = assignment.assetType.id.toString()
+								row.domainTypeId = assignedDomainType.getId().toString()
+								row.domainTypeName = assignedDomainType.getName()
+								rows.add(row)
+							}
+						}
+
+						if(!assignment.getStatuses().isEmpty())
+						{
+							def assignedStatuses = assignment.getStatuses()
+							for(assignedStatus in assignedStatuses)
+							{
+								row = [:]
+								row.ruleConceptName = assignment.assetType.name
+								row.ruleConceptId = assignment.assetType.id.toString()
+								row.statusId = assignedStatus.getId().toString()
+								row.statusName = assignedStatus.getName()
+								rows.add(row)
+							}
+						}
+
+						if(!assignment.getDataQualityRules().isEmpty())
+						{
+							def assignedDQRules = assignment.getDataQualityRules()
+							for(assignedDQRule in assignedDQRules)
+							{
+								row = [:]
+								row.ruleConceptName = assignment.assetType.name
+								row.ruleConceptId = assignment.assetType.id.toString()
+								row.deRuleId = assignedDQRule.getId().toString()
+								row.deRuleName = assignedDQRule.getName()
+								rows.add(row)
+							}
+						}
+						row = [:]
+						row.ruleConceptName = assignment.assetType.name
+						row.ruleConceptId = assignment.assetType.id.toString()
+						try {
+							row.defaultStatusId = statusApi.getStatus(assignment.getDefaultStatusId()).getName()
+						}
+						catch(e)
+						{
+							row.defaultStatusId = 'Candidate'
+						}
+						rows.add(row)
+
+						row = [:]
+						row.ruleConceptName = assignment.assetType.name
+						row.ruleConceptId = assignment.assetType.id.toString()
+						if(assignment.getScope() != null){
+							row.scopeName = assignment.getScope().getName()
+							row.scopeId = assignment.getScope().getId().toString()
+						}
+						rows.add(row)
+					}
+				}
+			}
+		}
+		createSheet ("Global Assignments", header, rows.flatten())
+	}
+
+	def exportScopes = {
+		->
+		def header = [:]
+		header.ScopeName = "Scope Name"
+		header.scopeId = "Scope Id"
+		header.description = "Description"
+		header.domainName = "Domain Name"
+		header.domainId = "Domain Id"
+		header.communityName = "Community Name"
+		header.communityId = "Community Id"
+		def rows = []
+		List <String> scopes = scopeApi.getAllScopes()
+		for(scope in scopes)
+		{
+			if(!scope.getCommunities().isEmpty())
+			{
+				def communities = scope.getCommunities()
+				for(community in communities)
+				{
+					row = [:]
+					row.ScopeName = scope.getName()
+					row.scopeId = scope.getId().toString()
+					row.description = scope.getDescription()
+					row.communityName = community.getName()
+					row.communityId = community.getId().toString()
+					rows.add(row)
+				}
+			}
+			if(!scope.getDomains().isEmpty())
+			{
+				def domains = scope.getDomains()
+				for(domain in domains)
+				{
+					row = [:]
+					row.ScopeName = scope.getName()
+					row.scopeId = scope.getId().toString()
+					row.description = scope.getDescription()
+					row.domainName = domain.getName()
+					row.domainId = domain.getId().toString()
+					rows.add(row)
+				}
+			}
+		}
+		createSheet ("Scopes", header, rows.flatten())
+	}
+
+	def exportScopedAssignments = {
+		->
+		def header = [:]
+		header.ruleConceptName = "Rule Concept Name"
+		header.ruleConceptId = "Rule Concept Id"
+		header.attributeName = "Attribute Name"
+		header.attributeId = "Assigned Resource Id"
+		header.minOccurs = "Minimum Occurs"
+		header.maxOccurs = "Maximum Occurs"
+		header.relSourceAsset = "Source Asset Type Name"
+		header.relSourceId = "Source Asset Type Id"
+		header.relRole = "Role"
+		header.relCoRole = "Co Role"
+		header.relTargetAsset = "Target Asset Type Name"
+		header.relTargetId = "Target Asset Type Id"
+		header.relTypeId = "Assigned Relation Type Id"
+		header.crName = "Complex Relation Type Name"
+		header.crId = "Complex Relation Type Id"
+		header.domainTypeName = "Domain Type Name"
+		header.domainTypeId = "Domain Type Id"
+		header.statusName = "Status Name"
+		header.statusId = "Status Id"
+		header.deRuleName = "DQ Rule Name"
+		header.deRuleId = "DQ Rule Id"
+		header.defaultStatusId = "Default Status Id"
+		header.scopeName = "Scope Name"
+		header.scopeId = "Scope Id"
+		header.assignmentName = "Assignment Name(for import use only)"
+		def rows = []
+		def assignmentUID = ""
+		def assignmentName = ""
+		def allAssetTypes = assetTypeApi.findAssetTypes(FindAssetTypesRequest.builder().build()).getResults()
+		loggerApi.info('allAssetTypes ---'+allAssetTypes.toString())
+		allAssetTypes.each{ allAssetType ->
+			def assignments = assignmentApi.getAssignmentsForAssetType(allAssetType.id)
+			for(assignment in assignments)
+			{
+				if(assignment.getScope() != null)
+				{
+					def assignmentModifiedDate = new Date(assignment.getLastModifiedOn())
+					if(assignmentModifiedDate  >= startDate && assignmentModifiedDate <= endDate)
+					{
+						assignmentName = assignment.assetType.name +' - '+ assignment.getScope().getName()
+						loggerApi.info('assignment ----'+assignment.getResourceType().toString())
+						assignmentUID = assignment.id.toString()
+						if(!assignment.getAssignedAttributeTypes().isEmpty())
+						{
+							def assignedAttributeTypes = assignment.getAssignedAttributeTypes()
+							for(assignedAttributeType in assignedAttributeTypes)
+							{
+								row = [:]
+								row.assignmentName = assignmentName
+								row.ruleConceptName = assignment.assetType.name
+								row.ruleConceptId = assignment.assetType.id.toString()
+								row.attributeName = assignedAttributeType.getAttributeType().getName()
+								row.attributeId = assignedAttributeType.getAssignedResourceId().toString()
+								row.minOccurs = assignedAttributeType.getMinimumOccurrences()
+								if(assignedAttributeType.getMaximumOccurrences() != null)
+								{
+									row.maxOccurs = assignedAttributeType.getMaximumOccurrences()
+								}
+								else
+								{
+									row.maxOccurs = 10000
+								}
+								rows.add(row)
+							}
+						}
+
+						if(!assignment.getAssignedRelationTypes().isEmpty())
+						{
+							def assignedRelationTypes = assignment.getAssignedRelationTypes()
+							for(assignedRelationType in assignedRelationTypes)
+							{
+								row = [:]
+								row.assignmentName = assignmentName
+								row.ruleConceptName = assignment.assetType.name
+								row.ruleConceptId = assignment.assetType.id.toString()
+								row.relTypeId = assignedRelationType.getAssignedResourceId().toString()
+								row.relSourceAsset = assignedRelationType.getRelationType().getSourceType().getName()
+								row.relSourceId = assignedRelationType.getRelationType().getSourceType().getId().toString()
+								row.relRole = assignedRelationType.getRelationType().getRole()
+								row.relCoRole = assignedRelationType.getRelationType().getCoRole()
+								row.relTargetAsset = assignedRelationType.getRelationType().getTargetType().getName()
+								row.relTargetId = assignedRelationType.getRelationType().getTargetType().getId().toString()
+								row.minOccurs = assignedRelationType.getMinimumOccurrences()
+								if(assignedRelationType.getMaximumOccurrences() != null)
+								{
+									row.maxOccurs = assignedRelationType.getMaximumOccurrences()
+								}
+								else
+								{
+									row.maxOccurs = 10000
+								}
+								rows.add(row)
+							}
+						}
+
+						if(!assignment.getAssignedComplexRelationTypes().isEmpty())
+						{
+							def assignedComplexRelationTypes = assignment.getAssignedComplexRelationTypes()
+							for(assignedComplexRelationType in assignedComplexRelationTypes)
+							{
+								row = [:]
+								row.assignmentName = assignmentName
+								row.ruleConceptName = assignment.assetType.name
+								row.ruleConceptId = assignment.assetType.id.toString()
+								row.crId = assignedComplexRelationType.getAssignedResourceId().toString()
+								row.crName = assignedComplexRelationType.getComplexRelationType().getName()
+								row.minOccurs = assignedComplexRelationType.getMinimumOccurrences()
+								if(assignedComplexRelationType.getMaximumOccurrences() != null)
+								{
+									row.maxOccurs = assignedComplexRelationType.getMaximumOccurrences()
+								}
+								else
+								{
+									row.maxOccurs = 10000
+								}
+								rows.add(row)
+							}
+						}
+
+						if(!assignment.getDomainTypes().isEmpty())
+						{
+							def assignedDomainTypes = assignment.getDomainTypes()
+							for(assignedDomainType in assignedDomainTypes)
+							{
+								row = [:]
+								row.assignmentName = assignmentName
+								row.ruleConceptName = assignment.assetType.name
+								row.ruleConceptId = assignment.assetType.id.toString()
+								row.domainTypeId = assignedDomainType.getId().toString()
+								row.domainTypeName = assignedDomainType.getName()
+								rows.add(row)
+							}
+						}
+
+						if(!assignment.getStatuses().isEmpty())
+						{
+							def assignedStatuses = assignment.getStatuses()
+							for(assignedStatus in assignedStatuses)
+							{
+								row = [:]
+								row.assignmentName = assignmentName
+								row.ruleConceptName = assignment.assetType.name
+								row.ruleConceptId = assignment.assetType.id.toString()
+								row.statusId = assignedStatus.getId().toString()
+								row.statusName = assignedStatus.getName()
+								rows.add(row)
+							}
+						}
+
+						if(!assignment.getDataQualityRules().isEmpty())
+						{
+							def assignedDQRules = assignment.getDataQualityRules()
+							for(assignedDQRule in assignedDQRules)
+							{
+								row = [:]
+								row.assignmentName = assignmentName
+								row.ruleConceptName = assignment.assetType.name
+								row.ruleConceptId = assignment.assetType.id.toString()
+								row.deRuleId = assignedDQRule.getId().toString()
+								row.deRuleName = assignedDQRule.getName()
+								rows.add(row)
+							}
+						}
+						row = [:]
+						row.assignmentName = assignmentName
+						row.ruleConceptName = assignment.assetType.name
+						row.ruleConceptId = assignment.assetType.id.toString()
+						try {
+							row.defaultStatusId = statusApi.getStatus(assignment.getDefaultStatusId()).getName()
+						}
+						catch(e)
+						{
+							row.defaultStatusId = 'Candidate'
+						}
+						rows.add(row)
+
+						row = [:]
+						row.assignmentName = assignmentName
+						row.ruleConceptName = assignment.assetType.name
+						row.ruleConceptId = assignment.assetType.id.toString()
+						if(assignment.getScope() != null){
+							row.scopeName = assignment.getScope().getName()
+							row.scopeId = assignment.getScope().getId().toString()
+						}
+						rows.add(row)
+					}
+				}
+			}
+		}
+		createSheet ("Scoped Assignments", header, rows.flatten())
+	}
+
+	def communityStructure = {
+		->
+		def header = [:]
+		header.communityId = "Community Id"
+		header.communityName = "Community Name"
+		header.communityDescription = "Community Description"
+		header.parentCommunityId = "Parent Community Id"
+		header.parentCommunityName = "Parent Community Name"
+		def rows = []
+		communityApi.findCommunities(FindCommunitiesRequest.builder().build()).getResults().each{ community ->
+			row = [:]
+			loggerApi.info('Community Name----'+community.getName())
+			row.communityId = community.getId().toString()
+			row.communityName = community.getName()
+			row.communityDescription = community.getDescription()
+			if(community.getParent() != null) {
+				loggerApi.info('Parent Community Name----'+community.getParent().getName())
+				row.parentCommunityId = community.getParent().getId().toString()
+				row.parentCommunityName = community.getParent().getName()
+			}
+			else
+			{
+				row.parentCommunityId = 'NA'
+				row.parentCommunityName = 'NA'
+			}
+			rows.add(row)
+		}
+		createSheet ("Community Structure", header, rows.flatten())
+	}
+
+	def domainStructure = {
+		->
+		def header = [:]
+		header.domainId = "Domain Id"
+		header.domainName = "Domain Name"
+		header.domainDescription = "Domain Description"
+		header.domainTypeId = "Domain Type Id"
+		header.domainTypeName = "Domain Type Name"
+		header.resCommunityId = "Community Id"
+		header.resCommunityName = "Community Name"
+		header.resParentCommunityId = "Parent Community Id"
+		header.resParentCommunityName = "Parent Community Name"
+		def rows = []
+		domainApi.findDomains(FindDomainsRequest.builder().build()).getResults().each{ domain ->
+			loggerApi.info('Domain Name----'+domain.getName())
+			loggerApi.info('Domain Type Id----'+domain.getType().getId())
+			loggerApi.info('Domain Type Name----'+domain.getType().getName())
+			loggerApi.info('Respon Community Name----'+domain.getCommunity().getName())
+			row = [:]
+			row.domainId = domain.getId().toString()
+			row.domainName = domain.getName()
+			if(domain.getDescription() != null)
+			{
+				if(domain.getDescription().length() >= 32768)
+				{
+					row.domainDescription = domain.getDescription().substring(0,32766)
+				}
+				else
+				{
+					row.domainDescription = domain.getDescription()
+				}
+			}
+			else
+			{
+				row.domainDescription = domain.getDescription()
+			}
+			row.domainTypeId = domain.getType().getId().toString()
+			row.domainTypeName = domain.getType().getName()
+			row.resCommunityId = domain.getCommunity().getId().toString()
+			row.resCommunityName = domain.getCommunity().getName()
+
+			communityApi.findCommunities(FindCommunitiesRequest.builder().name(domain.getCommunity().getName()).build()).getResults().each{ resCommunity ->
+				if(resCommunity.getParent() != null) {
+					loggerApi.info('Respon Parent Community Name----'+resCommunity.getParent().getName())
+					row.resParentCommunityId = resCommunity.getParent().getId().toString()
+					row.resParentCommunityName = resCommunity.getParent().getName()
+				}
+				else
+				{
+					row.resParentCommunityId = 'NA'
+					row.resParentCommunityName = 'NA'
+				}
+			}
+			rows.add(row)
+		}
+		createSheet ("Domain Structure", header, rows.flatten())
+	}
+
+	//Creating the export file
+	def createExportFile = {
+		->
+		def fos =  new FileOutputStream(exportTempFile)
+		workbook.write(fos)
+		fos.close()
+
+		def exportFileId = fileComponentImpl.addFile(exportFileName,
+				new FileInputStream(exportTempFile))
+
+		def exportFileUrl = applicationComponent.getBaseURL() + "rest/1.0/file/" + exportFileId
+		attachmentComponent.addAttachmentToResource(item.id, "VC", exportFileId,exportFileName)
+
+		loggerApi.info('file created with name------>'+exportFileName +' file url -->>'+exportFileUrl)
+		execution.setVariable('exportFileUrl', exportFileUrl)
+	}
+	def exec = {
+		->
+		exportAssetTypes()
+		exportVocabularyTypes()
+		exportAttributeTypes()
+		exportRelationTypes()
+		exportComplexRelations()
+		exportResourceRoles()
+		exportStatuses()
+		exportDQRules()
+		exportGlobalAssignments()
+		exportScopes()
+		exportScopedAssignments()
+		communityStructure()
+		domainStructure()
+		createExportFile()
+	}
+	try {
+		init()
+		exec()
+	}
+	catch (e) {
+		def prelude = "Some issues were encountered while exporting metamodel."
+		def moreInfo = "For a more detailed error message and the complete stack trace, please check DGC logs in 'Settings > General > Logs' or <DGC_USER_HOME>/logs/dgc.log"
+		msg = "${prelude} ${br}${e.getClass().getName()}: ${e.getLocalizedMessage()} ${br}${moreInfo}".toString()
+		execution.setVariable('msg',msg)
+		if (lenientExceptionHandling) {
+			loggerApi.warn(prelude)
+		}
+		else {
+			loggerApi.error(prelude + ' ' + e)
+		}
+		return exitFail()
+
+	}
+	return exitSuccess()
+
+}
+def exportBindings = {
+	it.keySet().each{ var ->
+		execution.setVariable(var, it[var])
+	}
+}
+exportBindings(exportMetamodel(exportMode, exportFileSuffix))
+]]></script>
+    </scriptTask>
+    <sequenceFlow id="flow1" sourceRef="startevent1" targetRef="exclusivegateway1"></sequenceFlow>
+    <exclusiveGateway id="exclusivegateway1" name="Exclusive Gateway"></exclusiveGateway>
+    <sequenceFlow id="flow3" name="Custom Metamodel" sourceRef="exclusivegateway1" targetRef="scripttask_exportCustom">
+      <conditionExpression xsi:type="tFormalExpression"><![CDATA[${exportMode == 'custom'}]]></conditionExpression>
+    </sequenceFlow>
+    <scriptTask id="scripttask_exportAll" name="Export Entire Metamodel" scriptFormat="groovy" activiti:autoStoreVariables="false">
+      <script><![CDATA[import java.io.FileOutputStream
+import org.apache.poi.hssf.usermodel.HSSFWorkbook
+import com.collibra.dgc.core.api.dto.meta.assettype.FindAssetTypesRequest
+import com.collibra.dgc.core.api.dto.meta.domaintype.FindDomainTypesRequest
+import com.collibra.dgc.core.api.dto.meta.attributetype.FindAttributeTypesRequest
+import com.collibra.dgc.core.api.dto.meta.relationtype.FindRelationTypesRequest
+import com.collibra.dgc.core.api.dto.meta.status.FindStatusesRequest
+import com.collibra.dgc.core.api.dto.role.FindRolesRequest
+import com.collibra.dgc.core.api.dto.quality.FindDataQualityRulesRequest
+import com.collibra.dgc.core.api.dto.instance.community.FindCommunitiesRequest
+import com.collibra.dgc.core.api.dto.instance.domain.FindDomainsRequest
+
+def exportMetamodel = { exportMode, exportFileSuffix  ->
+	def result
+	def br
+	def msg
+	def exportUser
+	def lenientExceptionHandling
+	def workbook
+	def exportFileName
+	def exportTempFile
+	def init = {
+		->
+		br = "<br/>${System.getProperty('line.separator')}"
+		result = [:]
+		lenientExceptionHandling = false
+		msg = ""
+		workbook = new HSSFWorkbook()
+		exportUser = userComponent.getCurrentUser().getFullName()
+		exportFileName = "${exportMode} Operating Model Export by ${exportUser} on ${new Date().format('YYYY-MM-dd hh-mm-ss zzz')}${exportFileSuffix}"
+		exportTempFile = File.createTempFile(exportUser,exportFileSuffix)
+		loggerApi.info('exportFileName-------->'+exportFileName)
+	}
+	def prepExit = { fail ->
+		result.failed = fail
+		result.message = msg.toString()
+		result
+	}
+	def exitFail = { prepExit(true) }
+	def exitSuccess = { prepExit(false) }
+
+	def populateSheet = { newSheet, header, rows ->
+		headerRow = newSheet.createRow(0)
+		header.keySet().eachWithIndex{ col, i ->
+			headerRow.createCell(i).setCellValue(header[col])
+		}
+		loggerApi.info('Header returned')
+		def rowNum = 1
+		rows.each { row ->
+			def reportRow = newSheet.createRow(rowNum)
+			header.keySet().eachWithIndex{ col, i ->
+				if(row.containsKey(col)){
+					val = row.get(col)
+				}else{
+					val = null
+				}
+				reportRow.createCell(i).setCellValue(val)
+			}
+			rowNum++
+		}
+	}
+	loggerApi.info('Rows returned')
+	loggerApi.info('Data Populated')
+
+	def createSheet = { sheetName, header, rows ->
+		def newSheet = workbook.createSheet(sheetName)
+		populateSheet(newSheet, header, rows)
+	}
+	loggerApi.info('Sheet Created')
+
+	//Exporting asset types
+	def exportAssetTypes = {
+		->
+		def assetTypes = assetTypeApi.findAssetTypes(FindAssetTypesRequest.builder().build()).getResults()
+		def header = [:]
+		header.asset = "Asset name"
+		header.assetId = "Asset Id"
+		header.assetDesc = "Description"
+		header.parentAsset = "Parent Asset"
+		header.parentAssetId = "Parent Asset Id"
+		header.colorCode = "Color"
+		header.iconCode = "Symbol Icon"
+		header.acronymCode = "Symbol Code"
+		header.symbolType = "Symbol Type"
+		def rows = []
+		assetTypes.each{ assetType ->
+			row = [:]
+			row.assetId = assetType.id.toString()
+			row.asset = assetType.name
+			if(assetType.description != null)
+			{
+				row.assetDesc = assetType.description
+			}
+			if(assetType.parent != null)
+			{
+				row.parentAsset = assetType.parent.name
+				row.parentAssetId = assetType.parent.id.toString()
+			}
+			row.colorCode = assetType.getSymbolData().getColor()
+			row.iconCode = assetType.getSymbolData().getIconCode()
+			row.acronymCode = assetType.getSymbolData().getAcronymCode()
+			row.symbolType = assetType.getSymbolData().getSymbolType().toString()
+			rows.add(row)
+		}
+		createSheet ("Asset Types", header, rows.flatten())
+		loggerApi.info('Asset Types Extracted')
+	}
+	//Exporting vocabulary types
+	def exportVocabularyTypes = {
+		->
+		def vocTypes = domainTypeApi.findDomainTypes(FindDomainTypesRequest.builder().build()).getResults()
+		def header = [:]
+		header.voc = "Domain type name"
+		header.vocId = "Domain type Id"
+		header.vocDesc = "Description"
+		header.parentVoc = "Parent Domain type name"
+		header.parentVocId = "Parent Domain type Id"
+		def rows = []
+		vocTypes.each{ vocType ->
+			row = [:]
+			row.voc = vocType.name
+			row.vocId = vocType.id.toString()
+			if(vocType.description != null)
+			{
+				row.vocDesc = vocType.description
+			}
+			if(vocType.parent != null)
+			{
+				row.parentVoc = vocType.parent.name
+				row.parentVocId = vocType.parent.id.toString()
+			}
+			rows.add(row)
+		}
+		createSheet ("Domain Types", header, rows.flatten())
+		loggerApi.info('Domain Types Extracted')
+	}
+	//Exporting attribute types
+	def exportAttributeTypes = {
+		->
+		def attributeTypes = attributeTypeApi.findAttributeTypes(FindAttributeTypesRequest.builder().build()).getResults()
+		def header = [:]
+		header.attributeName = "Attribute type name"
+		header.attributeId = "Attribute type Id"
+		header.attrDesc = "Description"
+		header.attrDType = "Data type"
+		header.values = "Values"
+		header.isInteger = 'IsInteger'
+		header.metric = "Metric"
+		header.language = "Language"
+		def rows = []
+		attributeTypes.each{ attributeType ->
+			row = [:]
+			row.attributeName = attributeType.name
+			row.attributeId = attributeType.id.toString()
+			if(attributeType.description != null) {
+				row.attrDesc = attributeType.description
+			}
+			def aType = attributeType.resourceType
+			switch(aType) {
+				case "StringAttributeType"  :
+					aType = "Text"
+					break;
+				case "BooleanAttributeType"  :
+					aType = "True/False"
+					break;
+				case "DateAttributeType"  :
+					aType = "Date"
+					break;
+				case "NumericAttributeType"  :
+					aType = "Number"
+					break;
+				case "SingleValueListAttributeType"  :
+					aType = "Selection"
+					break;
+				case "MultiValueListAttributeType"  :
+					aType = "Multi Selection"
+					break;
+				case "ScriptAttributeType" :
+					aType = "Script"
+					break;
+				default :
+					loggerApi.info('Attribute type '+ aType +' not listed in case')
+			}
+			row.attrDType = aType
+			if(aType == 'Selection' || aType == 'Multi Selection') {
+				def selectionValues = attributeType.allowedValues.toString()
+				selectionValues = selectionValues.replaceAll("\\[", "");
+				selectionValues = selectionValues.replaceAll("\\]", "");
+				row.values = selectionValues
+			}
+			if(aType == 'Number')
+			{
+				def integerValue = attributeType.isInteger
+				row.isInteger = integerValue
+				def metricValue = attributeType.statisticsEnabled
+				row.metric = metricValue
+			}
+			if(aType == 'True/False')
+			{
+				def metricV = attributeType.statisticsEnabled
+				if(metricV == 'null')
+				{
+					row.metric = 'FALSE'
+				}
+				else
+				{
+					row.metric = metricV
+				}
+			}
+			if(aType == 'Script')
+			{
+				def lang = attributeType.language
+				if(lang != null)
+				{
+					row.language = lang
+				}
+			}
+			rows.add(row)
+		}
+		createSheet ("Attribute Types", header, rows.flatten())
+		loggerApi.info('Attribute Types Extracted')
+	}
+	//Exporting relation types
+	def exportRelationTypes = {
+		->
+		def binaryFactTypes = relationTypeApi.findRelationTypes(FindRelationTypesRequest.builder().build()).getResults()
+		def header = [:]
+		header.headTermName = "Head Term Name"
+		header.headTermId = "Head Term Id"
+		header.role = "Role"
+		header.coRole = "CoRole"
+		header.tailTermName = "Tail Term Name"
+		header.tailTermId = "Tail Term Id"
+		header.relationId = "Relation Id"
+		def rows = []
+		binaryFactTypes.collect{ binaryFactType ->
+			if(binaryFactType.getRole() != null && binaryFactType.getCoRole() != null)
+			{
+				row = [:]
+				row.headTermName = binaryFactType.getSourceType().getName()
+				row.headTermId = binaryFactType.getSourceType().getId().toString()
+				row.role = binaryFactType.getRole()
+				row.coRole = binaryFactType.getCoRole()
+				row.tailTermName = binaryFactType.getTargetType().getName()
+				row.tailTermId = binaryFactType.getTargetType().getId().toString()
+				row.relationId = binaryFactType.getId().toString()
+				rows.add(row)
+			}
+		}
+		createSheet ("Relation Types", header, rows.flatten())
+		loggerApi.info('Relation Types Extracted')
+	}
+	//Exporting complex relations
+	def exportComplexRelations = {
+		->
+		def complexRelationTypes = complexRelationTypeApi.getAllComplexRelationTypes().sort()
+		def custComplexRelationTypes = []
+		def defaultComplexRelations = ['Fact Type', 'Context']
+		def header = [:]
+		header.crName = "Complex Relation Name"
+		header.crId = "Complex Relation Id"
+		header.crDesc = "Description"
+		header.crAttrName = "Attribute Name"
+		header.crAttrId = "Attribute Id"
+		header.crMinOccur = "Min Occurs"
+		header.crMaxOccur = "Max Occurs"
+		header.crRole = "Role"
+		header.crTailName = "Tail Term Name"
+		header.crTailId = "Tail Term Id"
+		header.colorCode = "Color"
+		header.iconCode = "Symbol Icon"
+		header.acronymCode = "Symbol Code"
+		header.symbolType = "Symbol Type"
+		def rows =[]
+		for (complexRelationType in complexRelationTypes) {
+			if(!defaultComplexRelations.contains(complexRelationType.getName())) {
+				custComplexRelationTypes.add(complexRelationType)
+			}
+		}
+		custComplexRelationTypes.each{complexRel ->
+
+			if(!complexRel.getAttributeTypes().isEmpty())
+			{
+				complexRel.getAttributeTypes().each{complexAttribute ->
+					loggerApi.info('attribute type--------'+complexAttribute.toString())
+					row = [:]
+					row.crName = complexRel.getName()
+					row.crId = complexRel.getId().toString()
+					if(complexRel.getDescription() != null)
+					{
+						row.crDesc = complexRel.getDescription()
+					}
+					row.crAttrName = complexAttribute.getAttributeType().getName()
+					row.crAttrId = complexAttribute.getAttributeType().getId().toString()
+					row.crMinOccur = complexAttribute.getMinimumOccurrences()
+					if(complexAttribute.getMaximumOccurrences() == null)
+					{
+						row.crMaxOccur = 1
+					}
+					else
+					{
+						row.crMaxOccur = complexAttribute.getMaximumOccurrences()
+					}
+					row.colorCode = complexRel.getSymbolData().getColor()
+					row.iconCode = complexRel.getSymbolData().getIconCode()
+					row.acronymCode = complexRel.getSymbolData().getAcronymCode()
+					row.symbolType = complexRel.getSymbolData().getSymbolType().toString()
+					rows.add(row)
+				}
+			}
+		}
+		custComplexRelationTypes.each{complexRelType ->
+			if(!complexRelType.getLegTypes().isEmpty())
+			{
+				complexRelType.getLegTypes().each{complexBinary ->
+					row = [:]
+					row.crName = complexRelType.getName()
+					row.crId = complexRelType.getId().toString()
+					if(complexRelType.getDescription() != null)
+					{
+						row.crDesc = complexRelType.getDescription()
+					}
+					row.crRole = complexBinary.getRole()
+					row.crTailName = complexBinary.getAssetType().getName()
+					row.crTailId = complexBinary.getAssetType().getId().toString()
+					row.crMinOccur = complexBinary.getMinimumOccurrences()
+					if(complexBinary.getMaximumOccurrences() == null)
+					{
+						row.crMaxOccur = 2147483647
+					}
+					else
+					{
+						row.crMaxOccur = complexBinary.getMaximumOccurrences()
+					}
+					row.colorCode = complexRelType.getSymbolData().getColor()
+					row.iconCode = complexRelType.getSymbolData().getIconCode()
+					row.acronymCode = complexRelType.getSymbolData().getAcronymCode()
+					row.symbolType = complexRelType.getSymbolData().getSymbolType().toString()
+					rows.add(row)
+				}
+			}
+		}
+		createSheet ("Complex Relations", header, rows.flatten())
+		loggerApi.info('Complex Relation Extracted')
+	}
+	//Exporting resource roles
+	def exportResourceRoles = {
+		->
+		def header = [:]
+		header.rrName = "Resource Role Name"
+		header.rrId = "Resource Role Id"
+		header.rrDesc = "Description"
+		header.rrRights = "Rights"
+		rows = []
+		def resourceRoles =roleApi.findRoles(FindRolesRequest.builder().build()).getResults().each{ resourceRole ->
+
+			if(!resourceRole.isGlobal())
+			{
+				def rights = resourceRole.getPermissions()
+				row = [:]
+				row.rrName = resourceRole.getName()
+				row.rrId = resourceRole.getId().toString()
+				if(resourceRole.getDescription() != null)
+				{
+					row.rrDesc = resourceRole.getDescription()
+				}
+				loggerApi.info(resourceRole.getName())
+
+				def rightAccess = ""
+				for (right in rights){
+					if (rightAccess == " ") {
+						rightAccess  = right
+					}
+					else {
+						rightAccess  = rightAccess+','+right
+					}
+				}
+				row.rrRights = rightAccess.replaceFirst(/,/, "")
+				rows.add(row)
+			}
+		}
+		createSheet ("Resource Roles", header, rows.flatten())
+		loggerApi.info('Resource Roles Extracted')
+	}
+
+	//Exporting statuses
+	def exportStatuses = {
+		->
+		def header = [:]
+		header.stName = "Status Name"
+		header.stId = "Status Id"
+		header.stDesc = "Description"
+		def rows =[]
+		def statuses =statusApi.findStatuses(FindStatusesRequest.builder().build()).getResults().each{ status ->
+			row = [:]
+			row.stName = status.name
+			row.stId = status.id.toString()
+			if(status.description != null)
+			{
+				row.stDesc = status.description
+			}
+			rows.add(row)
+		}
+		createSheet ("Statuses", header, rows.flatten())
+		loggerApi.info('Statuses Extracted')
+	}
+
+	def exportDQRules = {
+		->
+		def header = [:]
+		header.dqRuleName = "DQ Rule Name"
+		header.dqRuleId = "DQ Rule Id"
+		header.dqRuleDesc = "Description"
+		header.catTypeId = "Categorization Type Id"
+		header.catTypeAsset = "Categorization Type Resource Type"
+		header.attributeTypeId = "Attribute Type Id"
+		header.attributeTypeName = "Atribute Type Name"
+		header.countOperation = "Count Operation"
+		header.outBoundRelTypeId = "Outbound Rel Type Id"
+		header.relTypeId = "Relation Type Id"
+		header.isOutBoundRoleDirection = "Is Outbound Role Direction"
+		header.isRoleDirection = "Is Role Direction"
+		def rows = []
+		loggerApi.info('dq results -------'+dataQualityRuleApi.findDataQualityRules(FindDataQualityRulesRequest.builder().build()).getResults().toString())
+
+		def dataQualityRules = dataQualityRuleApi.findDataQualityRules(FindDataQualityRulesRequest.builder().build()).getResults().each{dataQualityRule ->
+			if(dataQualityRule != null)
+			{
+				loggerApi.info('DQRules ----'+dataQualityRule.toString())
+
+				def dqMetrics = dataQualityRule.getDataQualityMetrics().each{dqMetric ->
+					row = [:]
+					row.dqRuleName = dataQualityRule.getName()
+					row.dqRuleId = dataQualityRule.getId().toString()
+					row.attributeTypeId = dqMetric.getAttributeType().getId().toString()
+					row.attributeTypeName = dqMetric.getAttributeType().getName()
+					row.countOperation = dqMetric.getCountOperation().name()
+					rows.add(row)
+				}
+
+				def dqRelationTraces = dataQualityRule.getRelationTrace().getRelationTraceEntries().each{dqRelationTrace ->
+					row = [:]
+					row.dqRuleName = dataQualityRule.getName()
+					row.dqRuleId = dataQualityRule.getId().toString()
+					row.outBoundRelTypeId = dqRelationTrace.getOutBoundRelationTypeId().toString()
+					row.relTypeId = dqRelationTrace.getRelationTypeId().toString()
+					row.isOutBoundRoleDirection = dqRelationTrace.isOutBoundRoleDirection()
+					row.isRoleDirection = dqRelationTrace.isRoleDirection()
+					rows.add(row)
+				}
+				row = [:]
+				row.dqRuleName = dataQualityRule.getName()
+				row.dqRuleId = dataQualityRule.getId().toString()
+				row.dqRuleDesc = dataQualityRule.getDescription()
+				row.catTypeId = dataQualityRule.getCategorizationRelationType().getId().toString()
+				row.catTypeAsset = dataQualityRule.getCategorizationRelationType().getResourceType().toString()
+				rows.add(row)
+			}
+
+		}
+		createSheet ("Data Quality Rules", header, rows.flatten())
+		loggerComponent.info('DQ Rules Extracted')
+	}
+
+	def exportGlobalAssignments = {
+		->
+		def header = [:]
+		header.ruleConceptName = "Rule Concept Name"
+		header.ruleConceptId = "Rule Concept Id"
+		header.attributeName = "Attribute Name"
+		header.attributeId = "Assigned Resource Id"
+		header.minOccurs = "Minimum Occurs"
+		header.maxOccurs = "Maximum Occurs"
+		header.relSourceAsset = "Source Asset Type Name"
+		header.relSourceId = "Source Asset Type Id"
+		header.relRole = "Role"
+		header.relCoRole = "Co Role"
+		header.relTargetAsset = "Target Asset Type Name"
+		header.relTargetId = "Target Asset Type Id"
+		header.relTypeId = "Assigned Relation Type Id"
+		header.crName = "Complex Relation Type Name"
+		header.crId = "Complex Relation Type Id"
+		header.domainTypeName = "Domain Type Name"
+		header.domainTypeId = "Domain Type Id"
+		header.statusName = "Status Name"
+		header.statusId = "Status Id"
+		header.deRuleName = "DQ Rule Name"
+		header.deRuleId = "DQ Rule Id"
+		header.defaultStatusId = "Deafault Status Id"
+		header.scopeName = "Scope Name"
+		header.scopeId = "Scope Id"
+		def rows = []
+		def assignmentUID = ""
+		def allAssetTypes = assetTypeApi.findAssetTypes(FindAssetTypesRequest.builder().build()).getResults()
+		loggerApi.info('allAssetTypes ---'+allAssetTypes.toString())
+		allAssetTypes.each{ allAssetType ->
+			def assignments = assignmentApi.getAssignmentsForAssetType(allAssetType.id)
+			for(assignment in assignments)
+			{
+				if(assignment.getScope() == null)
+				{
+					loggerApi.info('assignment ----'+assignment.getResourceType().toString())
+					assignmentUID = assignment.id.toString()
+					if(!assignment.getAssignedAttributeTypes().isEmpty())
+					{
+						def assignedAttributeTypes = assignment.getAssignedAttributeTypes()
+						for(assignedAttributeType in assignedAttributeTypes)
+						{
+							row = [:]
+							row.ruleConceptName = assignment.assetType.name
+							row.ruleConceptId = assignment.assetType.id.toString()
+							row.attributeName = assignedAttributeType.getAttributeType().getName()
+							row.attributeId = assignedAttributeType.getAssignedResourceId().toString()
+							row.minOccurs = assignedAttributeType.getMinimumOccurrences()
+							if(assignedAttributeType.getMaximumOccurrences() != null)
+							{
+								row.maxOccurs = assignedAttributeType.getMaximumOccurrences()
+							}
+							else
+							{
+								row.maxOccurs = 10000
+							}
+							rows.add(row)
+						}
+					}
+
+					if(!assignment.getAssignedRelationTypes().isEmpty())
+					{
+						def assignedRelationTypes = assignment.getAssignedRelationTypes()
+						for(assignedRelationType in assignedRelationTypes)
+						{
+							row = [:]
+							row.ruleConceptName = assignment.assetType.name
+							row.ruleConceptId = assignment.assetType.id.toString()
+							row.relTypeId = assignedRelationType.getAssignedResourceId().toString()
+							row.relSourceAsset = assignedRelationType.getRelationType().getSourceType().getName()
+							row.relSourceId = assignedRelationType.getRelationType().getSourceType().getId().toString()
+							row.relRole = assignedRelationType.getRelationType().getRole()
+							row.relCoRole = assignedRelationType.getRelationType().getCoRole()
+							row.relTargetAsset = assignedRelationType.getRelationType().getTargetType().getName()
+							row.relTargetId = assignedRelationType.getRelationType().getTargetType().getId().toString()
+							row.minOccurs = assignedRelationType.getMinimumOccurrences()
+							if(assignedRelationType.getMaximumOccurrences() != null)
+							{
+								row.maxOccurs = assignedRelationType.getMaximumOccurrences()
+							}
+							else
+							{
+								row.maxOccurs = 10000
+							}
+							rows.add(row)
+						}
+					}
+
+					if(!assignment.getAssignedComplexRelationTypes().isEmpty())
+					{
+						def assignedComplexRelationTypes = assignment.getAssignedComplexRelationTypes()
+						for(assignedComplexRelationType in assignedComplexRelationTypes)
+						{
+							row = [:]
+							row.ruleConceptName = assignment.assetType.name
+							row.ruleConceptId = assignment.assetType.id.toString()
+							row.crId = assignedComplexRelationType.getAssignedResourceId().toString()
+							row.crName = assignedComplexRelationType.getComplexRelationType().getName()
+							row.minOccurs = assignedComplexRelationType.getMinimumOccurrences()
+							if(assignedComplexRelationType.getMaximumOccurrences() != null)
+							{
+								row.maxOccurs = assignedComplexRelationType.getMaximumOccurrences()
+							}
+							else
+							{
+								row.maxOccurs = 10000
+							}
+							rows.add(row)
+						}
+					}
+
+					if(!assignment.getDomainTypes().isEmpty())
+					{
+						def assignedDomainTypes = assignment.getDomainTypes()
+						for(assignedDomainType in assignedDomainTypes)
+						{
+							row = [:]
+							row.ruleConceptName = assignment.assetType.name
+							row.ruleConceptId = assignment.assetType.id.toString()
+							row.domainTypeId = assignedDomainType.getId().toString()
+							row.domainTypeName = assignedDomainType.getName()
+							rows.add(row)
+						}
+					}
+
+					if(!assignment.getStatuses().isEmpty())
+					{
+						def assignedStatuses = assignment.getStatuses()
+						for(assignedStatus in assignedStatuses)
+						{
+							row = [:]
+							row.ruleConceptName = assignment.assetType.name
+							row.ruleConceptId = assignment.assetType.id.toString()
+							row.statusId = assignedStatus.getId().toString()
+							row.statusName = assignedStatus.getName()
+							rows.add(row)
+						}
+					}
+
+					if(!assignment.getDataQualityRules().isEmpty())
+					{
+						def assignedDQRules = assignment.getDataQualityRules()
+						for(assignedDQRule in assignedDQRules)
+						{
+							row = [:]
+							row.ruleConceptName = assignment.assetType.name
+							row.ruleConceptId = assignment.assetType.id.toString()
+							row.deRuleId = assignedDQRule.getId().toString()
+							row.deRuleName = assignedDQRule.getName()
+							rows.add(row)
+						}
+					}
+					row = [:]
+					row.ruleConceptName = assignment.assetType.name
+					row.ruleConceptId = assignment.assetType.id.toString()
+					try {
+						row.defaultStatusId = statusApi.getStatus(assignment.getDefaultStatusId()).getName()
+					}
+					catch(e)
+					{
+						row.defaultStatusId = 'Candidate'
+					}
+					rows.add(row)
+
+					row = [:]
+					row.ruleConceptName = assignment.assetType.name
+					row.ruleConceptId = assignment.assetType.id.toString()
+					if(assignment.getScope() != null){
+						row.scopeName = assignment.getScope().getName()
+						row.scopeId = assignment.getScope().getId().toString()
+					}
+					rows.add(row)
+				}
+			}
+		}
+		createSheet ("Global Assignments", header, rows.flatten())
+	}
+
+	def exportScopes = {
+		->
+		def header = [:]
+		header.ScopeName = "Scope Name"
+		header.scopeId = "Scope Id"
+		header.description = "Description"
+		header.domainName = "Domain Name"
+		header.domainId = "Domain Id"
+		header.communityName = "Community Name"
+		header.communityId = "Community Id"
+		def rows = []
+		List <String> scopes = scopeApi.getAllScopes()
+		for(scope in scopes)
+		{
+			if(!scope.getCommunities().isEmpty())
+			{
+				def communities = scope.getCommunities()
+				for(community in communities)
+				{
+					row = [:]
+					row.ScopeName = scope.getName()
+					row.scopeId = scope.getId().toString()
+					row.description = scope.getDescription()
+					row.communityName = community.getName()
+					row.communityId = community.getId().toString()
+					rows.add(row)
+				}
+			}
+			if(!scope.getDomains().isEmpty())
+			{
+				def domains = scope.getDomains()
+				for(domain in domains)
+				{
+					row = [:]
+					row.ScopeName = scope.getName()
+					row.scopeId = scope.getId().toString()
+					row.description = scope.getDescription()
+					row.domainName = domain.getName()
+					row.domainId = domain.getId().toString()
+					rows.add(row)
+				}
+			}
+		}
+		createSheet ("Scopes", header, rows.flatten())
+	}
+
+	def exportScopedAssignments = {
+		->
+		def header = [:]
+		header.ruleConceptName = "Rule Concept Name"
+		header.ruleConceptId = "Rule Concept Id"
+		header.attributeName = "Attribute Name"
+		header.attributeId = "Assigned Resource Id"
+		header.minOccurs = "Minimum Occurs"
+		header.maxOccurs = "Maximum Occurs"
+		header.relSourceAsset = "Source Asset Type Name"
+		header.relSourceId = "Source Asset Type Id"
+		header.relRole = "Role"
+		header.relCoRole = "Co Role"
+		header.relTargetAsset = "Target Asset Type Name"
+		header.relTargetId = "Target Asset Type Id"
+		header.relTypeId = "Assigned Relation Type Id"
+		header.crName = "Complex Relation Type Name"
+		header.crId = "Complex Relation Type Id"
+		header.domainTypeName = "Domain Type Name"
+		header.domainTypeId = "Domain Type Id"
+		header.statusName = "Status Name"
+		header.statusId = "Status Id"
+		header.deRuleName = "DQ Rule Name"
+		header.deRuleId = "DQ Rule Id"
+		header.defaultStatusId = "Deafault Status Id"
+		header.scopeName = "Scope Name"
+		header.scopeId = "Scope Id"
+		header.assignmentName = "Assignment Name(for import use only)"
+		def rows = []
+		def assignmentUID = ""
+		def assignmentName = ""
+		def allAssetTypes = assetTypeApi.findAssetTypes(FindAssetTypesRequest.builder().build()).getResults()
+		loggerApi.info('allAssetTypes ---'+allAssetTypes.toString())
+		allAssetTypes.each{ allAssetType ->
+			def assignments = assignmentApi.getAssignmentsForAssetType(allAssetType.id)
+			for(assignment in assignments)
+			{
+				if(assignment.getScope() != null)
+				{
+					assignmentName = assignment.assetType.name +' - '+ assignment.getScope().getName()
+					loggerApi.info('assignment ----'+assignment.getResourceType().toString())
+					assignmentUID = assignment.id.toString()
+					if(!assignment.getAssignedAttributeTypes().isEmpty())
+					{
+						def assignedAttributeTypes = assignment.getAssignedAttributeTypes()
+						for(assignedAttributeType in assignedAttributeTypes)
+						{
+							row = [:]
+							row.assignmentName = assignmentName
+							row.ruleConceptName = assignment.assetType.name
+							row.ruleConceptId = assignment.assetType.id.toString()
+							row.attributeName = assignedAttributeType.getAttributeType().getName()
+							row.attributeId = assignedAttributeType.getAssignedResourceId().toString()
+							row.minOccurs = assignedAttributeType.getMinimumOccurrences()
+							if(assignedAttributeType.getMaximumOccurrences() != null)
+							{
+								row.maxOccurs = assignedAttributeType.getMaximumOccurrences()
+							}
+							else
+							{
+								row.maxOccurs = 1000
+							}
+							rows.add(row)
+						}
+					}
+
+					if(!assignment.getAssignedRelationTypes().isEmpty())
+					{
+						def assignedRelationTypes = assignment.getAssignedRelationTypes()
+						for(assignedRelationType in assignedRelationTypes)
+						{
+							row = [:]
+							row.assignmentName = assignmentName
+							row.ruleConceptName = assignment.assetType.name
+							row.ruleConceptId = assignment.assetType.id.toString()
+							row.relTypeId = assignedRelationType.getAssignedResourceId().toString()
+							row.relSourceAsset = assignedRelationType.getRelationType().getSourceType().getName()
+							row.relSourceId = assignedRelationType.getRelationType().getSourceType().getId().toString()
+							row.relRole = assignedRelationType.getRelationType().getRole()
+							row.relCoRole = assignedRelationType.getRelationType().getCoRole()
+							row.relTargetAsset = assignedRelationType.getRelationType().getTargetType().getName()
+							row.relTargetId = assignedRelationType.getRelationType().getTargetType().getId().toString()
+							row.minOccurs = assignedRelationType.getMinimumOccurrences()
+							if(assignedRelationType.getMaximumOccurrences() != null)
+							{
+								row.maxOccurs = assignedRelationType.getMaximumOccurrences()
+							}
+							else
+							{
+								row.maxOccurs = 10000
+							}
+							rows.add(row)
+						}
+					}
+
+					if(!assignment.getAssignedComplexRelationTypes().isEmpty())
+					{
+						def assignedComplexRelationTypes = assignment.getAssignedComplexRelationTypes()
+						for(assignedComplexRelationType in assignedComplexRelationTypes)
+						{
+							row = [:]
+							row.assignmentName = assignmentName
+							row.ruleConceptName = assignment.assetType.name
+							row.ruleConceptId = assignment.assetType.id.toString()
+							row.crId = assignedComplexRelationType.getAssignedResourceId().toString()
+							row.crName = assignedComplexRelationType.getComplexRelationType().getName()
+							row.minOccurs = assignedComplexRelationType.getMinimumOccurrences()
+							if(assignedComplexRelationType.getMaximumOccurrences() != null)
+							{
+								row.maxOccurs = assignedComplexRelationType.getMaximumOccurrences()
+							}
+							else
+							{
+								row.maxOccurs = 10000
+							}
+							rows.add(row)
+						}
+					}
+
+					if(!assignment.getDomainTypes().isEmpty())
+					{
+						def assignedDomainTypes = assignment.getDomainTypes()
+						for(assignedDomainType in assignedDomainTypes)
+						{
+							row = [:]
+							row.assignmentName = assignmentName
+							row.ruleConceptName = assignment.assetType.name
+							row.ruleConceptId = assignment.assetType.id.toString()
+							row.domainTypeId = assignedDomainType.getId().toString()
+							row.domainTypeName = assignedDomainType.getName()
+							rows.add(row)
+						}
+					}
+
+					if(!assignment.getStatuses().isEmpty())
+					{
+						def assignedStatuses = assignment.getStatuses()
+						for(assignedStatus in assignedStatuses)
+						{
+							row = [:]
+							row.assignmentName = assignmentName
+							row.ruleConceptName = assignment.assetType.name
+							row.ruleConceptId = assignment.assetType.id.toString()
+							row.statusId = assignedStatus.getId().toString()
+							row.statusName = assignedStatus.getName()
+							rows.add(row)
+						}
+					}
+
+					if(!assignment.getDataQualityRules().isEmpty())
+					{
+						def assignedDQRules = assignment.getDataQualityRules()
+						for(assignedDQRule in assignedDQRules)
+						{
+							row = [:]
+							row.assignmentName = assignmentName
+							row.ruleConceptName = assignment.assetType.name
+							row.ruleConceptId = assignment.assetType.id.toString()
+							row.deRuleId = assignedDQRule.getId().toString()
+							row.deRuleName = assignedDQRule.getName()
+							rows.add(row)
+						}
+					}
+					row = [:]
+					row.assignmentName = assignmentName
+					row.ruleConceptName = assignment.assetType.name
+					row.ruleConceptId = assignment.assetType.id.toString()
+					try {
+						row.defaultStatusId = statusApi.getStatus(assignment.getDefaultStatusId()).getName()
+					}
+					catch(e)
+					{
+						row.defaultStatusId = 'Candidate'
+					}
+					rows.add(row)
+
+					row = [:]
+					row.assignmentName = assignmentName
+					row.ruleConceptName = assignment.assetType.name
+					row.ruleConceptId = assignment.assetType.id.toString()
+					if(assignment.getScope() != null){
+						row.scopeName = assignment.getScope().getName()
+						row.scopeId = assignment.getScope().getId().toString()
+					}
+					rows.add(row)
+				}
+			}
+		}
+		createSheet ("Scoped Assignments", header, rows.flatten())
+	}
+
+	def communityStructure = {
+		->
+		def header = [:]
+		header.communityId = "Community Id"
+		header.communityName = "Community Name"
+		header.communityDescription = "Community Description"
+		header.parentCommunityId = "Parent Community Id"
+		header.parentCommunityName = "Parent Community Name"
+		def rows = []
+		communityApi.findCommunities(FindCommunitiesRequest.builder().build()).getResults().each{ community ->
+			row = [:]
+			loggerApi.info('Community Name----'+community.getName())
+			row.communityId = community.getId().toString()
+			row.communityName = community.getName()
+			row.communityDescription = community.getDescription()
+			if(community.getParent() != null) {
+				loggerApi.info('Parent Community Name----'+community.getParent().getName())
+				row.parentCommunityId = community.getParent().getId().toString()
+				row.parentCommunityName = community.getParent().getName()
+			}
+			else
+			{
+				row.parentCommunityId = 'NA'
+				row.parentCommunityName = 'NA'
+			}
+			rows.add(row)
+		}
+		createSheet ("Community Structure", header, rows.flatten())
+	}
+
+	def domainStructure = {
+		->
+		def header = [:]
+		header.domainId = "Domain Id"
+		header.domainName = "Domain Name"
+		header.domainDescription = "Domain Description"
+		header.domainTypeId = "Domain Type Id"
+		header.domainTypeName = "Domain Type Name"
+		header.resCommunityId = "Community Id"
+		header.resCommunityName = "Community Name"
+		header.resParentCommunityId = "Parent Community Id"
+		header.resParentCommunityName = "Parent Community Name"
+		def rows = []
+		domainApi.findDomains(FindDomainsRequest.builder().build()).getResults().each{ domain ->
+			loggerApi.info('Domain Name----'+domain.getName())
+			loggerApi.info('Domain Description----'+domain.getDescription())
+			loggerApi.info('Domain Type Id----'+domain.getType().getId())
+			loggerApi.info('Domain Type Name----'+domain.getType().getName())
+			loggerApi.info('Respon Community Name----'+domain.getCommunity().getName())
+			row = [:]
+			row.domainId = domain.getId().toString()
+			row.domainName = domain.getName()
+			if(domain.getDescription() != null)
+			{
+				if(domain.getDescription().length() >= 32768)
+				{
+					row.domainDescription = domain.getDescription().substring(0,32766)
+				}
+				else
+				{
+					row.domainDescription = domain.getDescription()
+				}
+			}
+			else
+			{
+				row.domainDescription = domain.getDescription()
+			}
+			row.domainTypeId = domain.getType().getId().toString()
+			row.domainTypeName = domain.getType().getName()
+			row.resCommunityId = domain.getCommunity().getId().toString()
+			row.resCommunityName = domain.getCommunity().getName()
+
+			communityApi.findCommunities(FindCommunitiesRequest.builder().name(domain.getCommunity().getName()).build()).getResults().each{ resCommunity ->
+				if(resCommunity.getParent() != null) {
+					loggerApi.info('Respon Parent Community Name----'+resCommunity.getParent().getName())
+					row.resParentCommunityId = resCommunity.getParent().getId().toString()
+					row.resParentCommunityName = resCommunity.getParent().getName()
+				}
+				else
+				{
+					row.resParentCommunityId = 'NA'
+					row.resParentCommunityName = 'NA'
+				}
+			}
+			rows.add(row)
+		}
+		createSheet ("Domain Structure", header, rows.flatten())
+	}
+
+	//Creating the export file
+	def createExportFile = {
+		->
+		def fos =  new FileOutputStream(exportTempFile)
+		workbook.write(fos)
+		fos.close()
+
+		def exportFileId = fileComponentImpl.addFile(exportFileName,
+				new FileInputStream(exportTempFile))
+
+		def exportFileUrl = applicationComponent.getBaseURL() + "rest/1.0/file/" + exportFileId
+		attachmentComponent.addAttachmentToResource(item.id, "VC", exportFileId,exportFileName)
+
+		loggerApi.info('file created with name------>'+exportFileName +' file url -->>'+exportFileUrl)
+		execution.setVariable('exportFileUrl', exportFileUrl)
+	}
+	def exec = {
+		->
+		exportAssetTypes()
+		exportVocabularyTypes()
+		exportAttributeTypes()
+		exportRelationTypes()
+		exportComplexRelations()
+		exportResourceRoles()
+		exportStatuses()
+		exportDQRules()
+		exportGlobalAssignments()
+		exportScopes()
+		exportScopedAssignments()
+		communityStructure()
+		domainStructure()
+		createExportFile()
+	}
+	try {
+		init()
+		exec()
+	}
+	catch (e) {
+		def prelude = "Some issues were encountered while exporting metamodel."
+		def moreInfo = "For a more detailed error message and the complete stack trace, please check DGC logs in 'Settings > General > Logs' or <DGC_USER_HOME>/logs/dgc.log"
+		msg = "${prelude} ${br}${e.getClass().getName()}: ${e.getLocalizedMessage()} ${br}${moreInfo}".toString()
+		execution.setVariable('msg',msg)
+		if (lenientExceptionHandling) {
+			loggerApi.warn(prelude)
+		}
+		else {
+			loggerApi.error(prelude + ' ' + e)
+		}
+		return exitFail()
+
+	}
+	return exitSuccess()
+
+}
+def exportBindings = {
+	it.keySet().each{ var ->
+		execution.setVariable(var, it[var])
+	}
+}
+exportBindings(exportMetamodel(exportMode, exportFileSuffix))
+]]></script>
+    </scriptTask>
+    <sequenceFlow id="flow4" name="Entire Metamodel" sourceRef="exclusivegateway1" targetRef="scripttask_exportAll">
+      <conditionExpression xsi:type="tFormalExpression"><![CDATA[${exportMode == 'full'}]]></conditionExpression>
+    </sequenceFlow>
+    <userTask id="usertask_export_result" name="Metamodel Export Failed" activiti:candidateUsers="user(${startUser})">
+      <documentation>The metamodel export process has encountered errors. Click on "View Export Results" to futher investigate the issue.</documentation>
+      <extensionElements>
+        <activiti:formProperty id="exportResultTaskButton" name="View Export Results" type="taskButton"></activiti:formProperty>
+        <activiti:formProperty id="message" name="message" type="textarea" default="${msg}" writable="false"></activiti:formProperty>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="flow6" sourceRef="usertask_export_result" targetRef="endevent1"></sequenceFlow>
+    <boundaryEvent id="boundarytimer2" name="Timer" attachedToRef="usertask_export_result" cancelActivity="true">
+      <timerEventDefinition>
+        <timeDuration>${infoTaskLifespan}</timeDuration>
+      </timerEventDefinition>
+    </boundaryEvent>
+    <sequenceFlow id="flow7" sourceRef="boundarytimer2" targetRef="endevent1"></sequenceFlow>
+    <exclusiveGateway id="exclusivegateway2" name="Exclusive Gateway"></exclusiveGateway>
+    <sequenceFlow id="flow8" sourceRef="scripttask_exportAll" targetRef="exclusivegateway2"></sequenceFlow>
+    <sequenceFlow id="flow9" sourceRef="scripttask_exportCustom" targetRef="exclusivegateway2"></sequenceFlow>
+    <sequenceFlow id="flow10" name="failed" sourceRef="exclusivegateway2" targetRef="usertask_export_result">
+      <conditionExpression xsi:type="tFormalExpression"><![CDATA[${failed}]]></conditionExpression>
+    </sequenceFlow>
+    <userTask id="usertask1" name="Metamodel Export Succeeded" activiti:candidateUsers="user(${startUser})">
+      <documentation>The metamodel export process completed successfully. The exported spreadsheet is attached to this domain.</documentation>
+    </userTask>
+    <sequenceFlow id="flow11" name="succeeded" sourceRef="exclusivegateway2" targetRef="usertask1">
+      <conditionExpression xsi:type="tFormalExpression"><![CDATA[${!failed}]]></conditionExpression>
+    </sequenceFlow>
+    <endEvent id="endevent2" name="End"></endEvent>
+    <sequenceFlow id="flow12" sourceRef="usertask1" targetRef="endevent2"></sequenceFlow>
+    <boundaryEvent id="boundarytimer3" name="Timer" attachedToRef="usertask1" cancelActivity="true">
+      <timerEventDefinition>
+        <timeDuration>${infoTaskLifespan}</timeDuration>
+      </timerEventDefinition>
+    </boundaryEvent>
+    <sequenceFlow id="flow13" sourceRef="boundarytimer3" targetRef="endevent2"></sequenceFlow>
+  </process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_Collaboration">
+    <bpmndi:BPMNPlane bpmnElement="Collaboration" id="BPMNPlane_Collaboration">
+      <bpmndi:BPMNShape bpmnElement="pool1" id="BPMNShape_pool1">
+        <omgdc:Bounds height="371.0" width="911.0" x="30.0" y="20.0"></omgdc:Bounds>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="lane1" id="BPMNShape_lane1">
+        <omgdc:Bounds height="371.0" width="891.0" x="50.0" y="20.0"></omgdc:Bounds>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="startevent1" id="BPMNShape_startevent1">
+        <omgdc:Bounds height="35.0" width="35.0" x="90.0" y="173.0"></omgdc:Bounds>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="endevent1" id="BPMNShape_endevent1">
+        <omgdc:Bounds height="35.0" width="35.0" x="800.0" y="80.0"></omgdc:Bounds>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="scripttask_exportCustom" id="BPMNShape_scripttask_exportCustom">
+        <omgdc:Bounds height="61.0" width="131.0" x="320.0" y="260.0"></omgdc:Bounds>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="exclusivegateway1" id="BPMNShape_exclusivegateway1">
+        <omgdc:Bounds height="40.0" width="40.0" x="180.0" y="170.0"></omgdc:Bounds>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="scripttask_exportAll" id="BPMNShape_scripttask_exportAll">
+        <omgdc:Bounds height="55.0" width="131.0" x="320.0" y="70.0"></omgdc:Bounds>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="usertask_export_result" id="BPMNShape_usertask_export_result">
+        <omgdc:Bounds height="55.0" width="135.0" x="610.0" y="70.0"></omgdc:Bounds>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="boundarytimer2" id="BPMNShape_boundarytimer2">
+        <omgdc:Bounds height="30.0" width="30.0" x="690.0" y="54.0"></omgdc:Bounds>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="exclusivegateway2" id="BPMNShape_exclusivegateway2">
+        <omgdc:Bounds height="40.0" width="40.0" x="520.0" y="170.0"></omgdc:Bounds>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="usertask1" id="BPMNShape_usertask1">
+        <omgdc:Bounds height="55.0" width="134.0" x="610.0" y="263.0"></omgdc:Bounds>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="boundarytimer3" id="BPMNShape_boundarytimer3">
+        <omgdc:Bounds height="30.0" width="30.0" x="700.0" y="307.0"></omgdc:Bounds>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="endevent2" id="BPMNShape_endevent2">
+        <omgdc:Bounds height="35.0" width="35.0" x="800.0" y="273.0"></omgdc:Bounds>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge bpmnElement="flow1" id="BPMNEdge_flow1">
+        <omgdi:waypoint x="125.0" y="190.0"></omgdi:waypoint>
+        <omgdi:waypoint x="180.0" y="190.0"></omgdi:waypoint>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="flow3" id="BPMNEdge_flow3">
+        <omgdi:waypoint x="200.0" y="210.0"></omgdi:waypoint>
+        <omgdi:waypoint x="199.0" y="290.0"></omgdi:waypoint>
+        <omgdi:waypoint x="320.0" y="290.0"></omgdi:waypoint>
+        <bpmndi:BPMNLabel>
+          <omgdc:Bounds height="39.0" width="90.0" x="202.0" y="274.0"></omgdc:Bounds>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="flow4" id="BPMNEdge_flow4">
+        <omgdi:waypoint x="200.0" y="170.0"></omgdi:waypoint>
+        <omgdi:waypoint x="199.0" y="97.0"></omgdi:waypoint>
+        <omgdi:waypoint x="320.0" y="97.0"></omgdi:waypoint>
+        <bpmndi:BPMNLabel>
+          <omgdc:Bounds height="39.0" width="81.0" x="197.0" y="103.0"></omgdc:Bounds>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="flow6" id="BPMNEdge_flow6">
+        <omgdi:waypoint x="745.0" y="97.0"></omgdi:waypoint>
+        <omgdi:waypoint x="800.0" y="97.0"></omgdi:waypoint>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="flow7" id="BPMNEdge_flow7">
+        <omgdi:waypoint x="705.0" y="54.0"></omgdi:waypoint>
+        <omgdi:waypoint x="704.0" y="32.0"></omgdi:waypoint>
+        <omgdi:waypoint x="817.0" y="32.0"></omgdi:waypoint>
+        <omgdi:waypoint x="817.0" y="80.0"></omgdi:waypoint>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="flow8" id="BPMNEdge_flow8">
+        <omgdi:waypoint x="451.0" y="97.0"></omgdi:waypoint>
+        <omgdi:waypoint x="539.0" y="97.0"></omgdi:waypoint>
+        <omgdi:waypoint x="540.0" y="170.0"></omgdi:waypoint>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="flow9" id="BPMNEdge_flow9">
+        <omgdi:waypoint x="451.0" y="290.0"></omgdi:waypoint>
+        <omgdi:waypoint x="539.0" y="290.0"></omgdi:waypoint>
+        <omgdi:waypoint x="540.0" y="210.0"></omgdi:waypoint>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="flow10" id="BPMNEdge_flow10">
+        <omgdi:waypoint x="560.0" y="190.0"></omgdi:waypoint>
+        <omgdi:waypoint x="677.0" y="190.0"></omgdi:waypoint>
+        <omgdi:waypoint x="677.0" y="125.0"></omgdi:waypoint>
+        <bpmndi:BPMNLabel>
+          <omgdc:Bounds height="39.0" width="25.0" x="633.0" y="128.0"></omgdc:Bounds>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="flow11" id="BPMNEdge_flow11">
+        <omgdi:waypoint x="560.0" y="190.0"></omgdi:waypoint>
+        <omgdi:waypoint x="677.0" y="190.0"></omgdi:waypoint>
+        <omgdi:waypoint x="677.0" y="263.0"></omgdi:waypoint>
+        <bpmndi:BPMNLabel>
+          <omgdc:Bounds height="13.0" width="54.0" x="621.0" y="238.0"></omgdc:Bounds>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="flow12" id="BPMNEdge_flow12">
+        <omgdi:waypoint x="744.0" y="290.0"></omgdi:waypoint>
+        <omgdi:waypoint x="800.0" y="290.0"></omgdi:waypoint>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="flow13" id="BPMNEdge_flow13">
+        <omgdi:waypoint x="715.0" y="337.0"></omgdi:waypoint>
+        <omgdi:waypoint x="714.0" y="354.0"></omgdi:waypoint>
+        <omgdi:waypoint x="817.0" y="354.0"></omgdi:waypoint>
+        <omgdi:waypoint x="817.0" y="308.0"></omgdi:waypoint>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>
